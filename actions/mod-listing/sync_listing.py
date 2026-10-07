@@ -60,6 +60,44 @@ def parse_listing(path):
     return meta, match.group(2).strip() + "\n"
 
 
+def for_platform(body, platform):
+    if body.count("<!-- only:") != body.count("<!-- /only -->"):
+        fail(f"unbalanced <!-- only:... --> markers in {listing_path}")
+
+    def keep(match):
+        return match.group(2) if match.group(1) == platform else ""
+
+    body = re.sub(r"<!-- only:(\w+) -->\n?(.*?)<!-- /only -->\n?", keep, body, flags=re.S)
+    return re.sub(r"\n{3,}", "\n\n", body)
+
+
+def stack_tables(body):
+    def stack(match):
+        cells = [match.group(1), match.group(2)]
+        image = next((cell for cell in cells if "<img" in cell), None)
+        text = next((cell for cell in cells if cell is not image), None)
+        if image is None or text is None:
+            return match.group(0)
+        text = "\n".join(line.strip() for line in text.strip().splitlines() if line.strip())
+        heading = re.match(r"(<h\d>.*?</h\d>)\s*(.*)", text, re.S)
+        head, rest = (heading.group(1), heading.group(2)) if heading else ("", text)
+        parts = [head, "<center>\n" + image.strip() + "\n</center>", rest]
+        return "\n\n".join(part for part in parts if part)
+
+    return re.sub(r"<table>\s*<tr>\s*<td[^>]*>(.*?)</td>\s*<td[^>]*>(.*?)</td>\s*</tr>\s*</table>", stack, body, flags=re.S)
+
+
+def to_html(body):
+    try:
+        from markdown_it import MarkdownIt
+    except ImportError:
+        fail("the CurseForge copy needs markdown-it-py: pip install -r requirements.txt next to sync_listing.py")
+    body = re.sub(r"<details>\s*<summary>(.*?)</summary>", r"<h3>\1</h3>", body, flags=re.S)
+    body = re.sub(r"\s*</details>", "", body)
+    html = MarkdownIt("commonmark", {"html": True}).enable("table").render(stack_tables(body))
+    return html.replace("<center>", '<p style="text-align:center">').replace("</center>", "</p>")
+
+
 def to_curseforge(body, slugs, modrinth_id, curseforge_id):
     missing = set()
 
@@ -110,7 +148,7 @@ project_id = properties.get("modrinth_project_id")
 if not project_id:
     fail("gradle.properties has no modrinth_project_id")
 
-wanted = {"title": name, "description": summary, "body": body}
+wanted = {"title": name, "description": summary, "body": for_platform(body, "modrinth")}
 live = modrinth("GET", f"/project/{project_id}")
 changes = {key: value for key, value in wanted.items() if (live.get(key) or "").strip() != value.strip()}
 
@@ -129,9 +167,9 @@ if changes and not dry_run:
     modrinth("PATCH", f"/project/{project_id}", changes)
     print(f"Updated {', '.join(changes)} on Modrinth")
 
-curseforge_body = to_curseforge(body, slugs, project_id, properties.get("curseforge_project_id"))
+curseforge_body = to_html(to_curseforge(for_platform(body, "curseforge"), slugs, project_id, properties.get("curseforge_project_id")))
 os.makedirs(out_dir, exist_ok=True)
-for file_name, content in (("name.txt", name + "\n"), ("summary.txt", summary + "\n"), ("description.md", curseforge_body)):
+for file_name, content in (("name.txt", name + "\n"), ("summary.txt", summary + "\n"), ("description.html", curseforge_body)):
     with open(os.path.join(out_dir, file_name), "w", encoding="utf-8") as f:
         f.write(content)
 
@@ -139,6 +177,6 @@ if summary_path:
     status = "dry run, nothing sent" if dry_run else ("updated " + ", ".join(changes) if changes else "already up to date")
     with open(summary_path, "a", encoding="utf-8") as f:
         f.write(f"## Modrinth\n\n{status}\n\n")
-        f.write("## CurseForge listing\n\nCurseForge has no API for project details. Paste these into the project settings, or download the `curseforge-listing` artifact.\n\n")
+        f.write("## CurseForge listing\n\nCurseForge has no API for project details. Paste these into the project settings, or download the `curseforge-listing` artifact. The description is HTML for the WYSIWYG editor's source view; it has no affiliate banner, which CurseForge only allows at the bottom of the page.\n\n")
         f.write(f"**Name**\n\n```\n{name}\n```\n\n**Summary**\n\n```\n{summary}\n```\n\n")
-        f.write(f"**Description** (Markdown)\n\n`````markdown\n{curseforge_body}`````\n")
+        f.write(f"**Description** (HTML)\n\n`````html\n{curseforge_body}`````\n")
