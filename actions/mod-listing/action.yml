@@ -1,0 +1,31 @@
+name: Mod listing
+description: Sync a mod's LISTING.md name, summary and description to Modrinth and prepare a CurseForge copy for pasting
+
+inputs:
+  dry-run:
+    description: Print what would change on Modrinth without sending it
+    default: "false"
+  listing:
+    description: Listing file with name and summary frontmatter; the rest is the description
+    default: LISTING.md
+  modrinth-token:
+    description: Modrinth token with the project write scope; the project id comes from gradle.properties modrinth_project_id
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Sync Modrinth and prepare CurseForge listing
+      shell: bash
+      env:
+        LISTING: ${{ inputs.listing }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        OUT_DIR: ${{ runner.temp }}/curseforge-listing
+        MODRINTH_TOKEN: ${{ inputs.modrinth-token }}
+      run: python3 -I "$GITHUB_ACTION_PATH/sync_listing.py"
+
+    - name: Upload CurseForge listing
+      uses: actions/upload-artifact@v7
+      with:
+        name: curseforge-listing
+        path: ${{ runner.temp }}/curseforge-listing
