@@ -60,7 +60,7 @@ def parse_listing(path):
     return meta, match.group(2).strip() + "\n"
 
 
-def to_curseforge(body, slugs):
+def to_curseforge(body, slugs, modrinth_id, curseforge_id):
     missing = set()
 
     def replace(match):
@@ -72,9 +72,11 @@ def to_curseforge(body, slugs):
 
     body = re.sub(r"https://modrinth\.com/(?:mod|project)/([\w-]+)", replace, body)
     body = body.replace("utm_source=modrinth", "utm_source=curseforge")
+    if curseforge_id:
+        body = re.sub(rf"img\.shields\.io/modrinth/(v|dt)/{re.escape(modrinth_id)}\b", rf"img.shields.io/curseforge/\1/{curseforge_id}", body)
     if missing:
         fail(f"add {', '.join(sorted(missing))} to curseforge_slugs in {listing_path}")
-    leftover = sorted(set(re.findall(r"\S*modrinth\.com\S*", body)))
+    leftover = sorted(set(re.findall(r"\S*(?:modrinth\.com|shields\.io/modrinth)\S*", body)))
     if leftover:
         fail(f"Modrinth links left in the CurseForge description: {', '.join(leftover)}")
     return body
@@ -103,7 +105,8 @@ if not name or not summary:
 slugs = meta.get("curseforge_slugs", {})
 if not isinstance(slugs, dict):
     fail("curseforge_slugs must be a map of Modrinth slug to CurseForge slug")
-project_id = read_properties("gradle.properties").get("modrinth_project_id")
+properties = read_properties("gradle.properties")
+project_id = properties.get("modrinth_project_id")
 if not project_id:
     fail("gradle.properties has no modrinth_project_id")
 
@@ -126,7 +129,7 @@ if changes and not dry_run:
     modrinth("PATCH", f"/project/{project_id}", changes)
     print(f"Updated {', '.join(changes)} on Modrinth")
 
-curseforge_body = to_curseforge(body, slugs)
+curseforge_body = to_curseforge(body, slugs, project_id, properties.get("curseforge_project_id"))
 os.makedirs(out_dir, exist_ok=True)
 for file_name, content in (("name.txt", name + "\n"), ("summary.txt", summary + "\n"), ("description.md", curseforge_body)):
     with open(os.path.join(out_dir, file_name), "w", encoding="utf-8") as f:
